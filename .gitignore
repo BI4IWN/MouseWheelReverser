@@ -1,0 +1,13 @@
+# 本地编译产物
+ScrollReverser
+MouseWheelReverser
+
+# 日志
+*.log
+
+# macOS
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/

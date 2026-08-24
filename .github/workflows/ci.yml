@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swiftc -O -arch arm64 -arch x86_64 -o MouseWheelReverser main.swift
+      - name: Smoke test (help)
+        run: ./MouseWheelReverser --help
