@@ -14,7 +14,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build universal binary
-        run: swiftc -O -arch arm64 -arch x86_64 -o MouseWheelReverser main.swift
+        run: |
+          swiftc -O -target arm64-apple-macosx13.0 -o mwr-arm64 main.swift
+          swiftc -O -target x86_64-apple-macosx13.0 -o mwr-x64 main.swift
+          lipo -create -output MouseWheelReverser mwr-arm64 mwr-x64
 
       - name: Attach to release
         uses: softprops/action-gh-release@v2
