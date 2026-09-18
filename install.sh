@@ -76,8 +76,10 @@ $EXTRA_ARGS    </array>
 EOF
 
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$UID" "$PLIST"
-launchctl kickstart "gui/$UID/$LABEL"
+sleep 1
+# bootout 异步清理可能未完成，bootstrap 失败时重试一次
+launchctl bootstrap "gui/$UID" "$PLIST" || launchctl bootstrap "gui/$UID" "$PLIST"
+launchctl kickstart "gui/$UID/$LABEL" 2>/dev/null || launchctl kickstart -k "gui/$UID/$LABEL" 2>/dev/null || true
 
 echo
 echo "✔ 安装完成：已在后台运行，并设置了开机自启。"

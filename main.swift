@@ -158,7 +158,22 @@ func osaSystemKey(_ keyCode: Int) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
     process.arguments = ["-e", "tell application \"System Events\" to key code \(keyCode) using control down"]
-    try? process.run()
+    let errPipe = Pipe()
+    process.standardError = errPipe
+    do {
+        try process.run()
+        process.waitUntilExit()
+        let errMsg = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 || !errMsg.isEmpty {
+            // 生产模式也要输出：手势触发失败必须可见
+            print("⚠️ osascript(key \(keyCode)) 失败 exit=\(process.terminationStatus) \(errMsg.trimmingCharacters(in: .whitespacesAndNewlines))")
+            fflush(stdout)
+        }
+        logDebug("osascript(key \(keyCode)) exit=\(process.terminationStatus)")
+    } catch {
+        print("⚠️ osascript 启动失败：\(error.localizedDescription)")
+        fflush(stdout)
+    }
 }
 
 /// 手势进行中的位移累积，超阈值即触发方向动作
@@ -342,18 +357,33 @@ let hidValueCallback: IOHIDValueCallback = { _, _, _, value in
     }
 }
 
-/// 枚举已连接的鼠标，按型号启用对应功能（如 MX Master 系列的手势键）。
+/// 对单个设备应用型号相关的功能开关（手势键等）。
+func applyDeviceFeatures(_ device: IOHIDDevice) {
+    let vendor = (IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? NSNumber)?.intValue ?? 0
+    let productID = (IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? NSNumber)?.intValue ?? 0
+    let product = (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String) ?? "未知型号"
+    print("检测到鼠标：\(product)（VID \(String(format: "0x%04X", vendor)) / PID \(String(format: "0x%04X", productID))）")
+    // MX Master 系列：拇指手势键为第 6 键，auto 模式下自动开启
+    if vendor == 0x046D, product.localizedCaseInsensitiveContains("MX Master"), gestureModeSetting == "auto" {
+        if !gestureEnabled {
+            print("→ MX Master 系列：启用手势键（HID 按钮\(gestureButtonIndex)）")
+        }
+        gestureEnabled = true
+    }
+}
+
+/// 设备接入回调：蓝牙鼠标在重启/唤醒后重连往往比守护进程启动慢，
+/// 一次性检测会漏掉它导致手势键未启用——改为事件驱动，设备接入即检测。
+let deviceMatchingCallback: IOHIDDeviceCallback = { _, result, _, device in
+    guard result == kIOReturnSuccess else { return }
+    applyDeviceFeatures(device)
+}
+
+/// 枚举当前已连接的鼠标（--list-mice 用）。
 func detectMice() {
     guard let manager = hidManager, let devices = IOHIDManagerCopyDevices(manager) else { return }
     for case let device as IOHIDDevice in devices as NSSet {
-        let vendor = (IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? NSNumber)?.intValue ?? 0
-        let productID = (IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? NSNumber)?.intValue ?? 0
-        let product = (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String) ?? "未知型号"
-        print("检测到鼠标：\(product)（VID \(String(format: "0x%04X", vendor)) / PID \(String(format: "0x%04X", productID))）")
-        // MX Master 系列：拇指手势键为第 6 键，auto 模式下自动开启
-        if vendor == 0x046D, product.localizedCaseInsensitiveContains("MX Master"), gestureModeSetting == "auto" {
-            gestureEnabled = true
-        }
+        applyDeviceFeatures(device)
     }
     if gestureModeSetting == "on" {
         gestureEnabled = true
@@ -365,6 +395,8 @@ func setupMouseWheelMonitor() {
     let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(0))
     let matching = [kIOHIDDeviceUsagePageKey as String: 1, kIOHIDDeviceUsageKey as String: 2] as CFDictionary
     IOHIDManagerSetDeviceMatching(manager, matching)
+    // 设备接入即检测（含启动时已在位的设备），蓝牙鼠标晚重连也能自动启用功能
+    IOHIDManagerRegisterDeviceMatchingCallback(manager, deviceMatchingCallback, nil)
     IOHIDManagerRegisterInputValueCallback(manager, hidValueCallback, nil)
     IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue as CFString)
     let result = IOHIDManagerOpen(manager, IOOptionBits(0))
@@ -558,9 +590,11 @@ if invertHorizontal {
 if debug {
     print("调试模式：所有滚轮/按钮事件将记录到日志。")
 }
-// 设备枚举需要运行循环转一会儿，延迟做型号检测并打印功能状态
-DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-    detectMice()
+// 设备接入回调会完成型号检测；这里延迟打印一次功能状态总览
+DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+    if gestureModeSetting == "on" {
+        gestureEnabled = true
+    }
     let nav = navMode == .keys ? "Cmd+[ / Cmd+]（合成按键）" : "系统原生"
     let gesture = gestureEnabled ? "开（HID 按钮\(gestureButtonIndex)，按住移动：左右=切换空间 上=任务控制 下=应用窗口）" : "关"
     print("按钮功能：前进/后退=\(nav)；手势键=\(gesture)")
